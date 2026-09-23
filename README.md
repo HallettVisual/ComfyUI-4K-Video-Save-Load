@@ -3,6 +3,22 @@
 Two video nodes that do their per-pixel work on the GPU, so 4K load and save stop
 being the slow part of a workflow. Separate from VideoHelperSuite, not a fork of it.
 
+## Speed
+
+Measured on an RTX 5090 at 3840x2160 with an idle GPU, milliseconds per frame.
+Load is 100 frames, best of two runs; save is 60 frames.
+
+| | VideoHelperSuite | Video 4K | |
+| --- | --- | --- | --- |
+| Load, full resolution | 377.9 | **20.1** | 18.8x |
+| Load, scaled to 1080p | 45.6 | **9.0** | 5.1x |
+| Save, h264 nvenc | 87.8 | **30.9** | 2.8x |
+| Save, h264 cpu | 104.2 | **39.4** | 2.6x |
+
+VHS's OpenCV loader reads full-resolution 4K at 43.5 ms/frame, so the ffmpeg path
+here is faster than either of the loaders it replaces. Measure with an idle GPU:
+a render in the background inflates these several times over.
+
 ## Load Video 4K
 
 One node in place of VHS's four loaders.
