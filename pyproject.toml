@@ -1,0 +1,11 @@
+[project]
+name = "comfyui-video4k"
+description = "Two video nodes, load and save, that do their pixel work on the GPU"
+version = "0.1.0"
+license = { file = "LICENSE" }
+dependencies = []
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "ComfyUI Video 4K"
+Icon = ""
