@@ -27,11 +27,25 @@ jobs:
     runs-on: ubuntu-latest
     # Never publishes from someone else's fork.
     if: github.repository_owner == 'HallettVisual'
+    env:
+      REGISTRY_ACCESS_TOKEN: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
     steps:
       - name: Check out code
         uses: actions/checkout@v4
 
+      - name: Skip publish when registry token is missing
+        if: ${{ github.event_name != 'workflow_dispatch' && env.REGISTRY_ACCESS_TOKEN == '' }}
+        run: |
+          echo "::notice title=Skipping registry publish::REGISTRY_ACCESS_TOKEN is not configured, so the publish step is being skipped."
+
+      - name: Require registry token for manual publish
+        if: ${{ github.event_name == 'workflow_dispatch' && env.REGISTRY_ACCESS_TOKEN == '' }}
+        run: |
+          echo "::error title=Missing registry token::Set the REGISTRY_ACCESS_TOKEN repository secret before running this workflow manually."
+          exit 1
+
       - name: Publish custom node
+        if: ${{ env.REGISTRY_ACCESS_TOKEN != '' }}
         uses: Comfy-Org/publish-node-action@v1
         with:
-          personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
+          personal_access_token: ${{ env.REGISTRY_ACCESS_TOKEN }}
