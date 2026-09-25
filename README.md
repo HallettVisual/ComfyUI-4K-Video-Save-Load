@@ -1,7 +1,11 @@
-# ComfyUI Video 4K
+# ComfyUI 4K Video Save Load
 
-Two video nodes that do their per-pixel work on the GPU, so 4K load and save stop
-being the slow part of a workflow. Separate from VideoHelperSuite, not a fork of it.
+Similar to the VideoHelperSuite nodes, but with the file's information exposed on
+the node and much faster load and save on large files. Two nodes that do their
+per-pixel work on the GPU, so 4K stops being the slow part of a workflow.
+
+Independent of VideoHelperSuite: it is not a fork and shares no code with it, so
+both can be installed at once.
 
 ## Speed
 

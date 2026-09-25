@@ -1,11 +1,25 @@
 [project]
-name = "comfyui-video4k"
-description = "Two video nodes, load and save, that do their pixel work on the GPU"
-version = "0.1.0"
+name = "comfyui-4k-video-save-load"
+version = "1.0.0"
+description = "Similar to the VHS nodes but with exposed file info and much faster load and save on large files."
+readme = "README.md"
 license = { file = "LICENSE" }
+requires-python = ">=3.10"
 dependencies = []
+keywords = ["comfyui", "video", "4k", "ffmpeg", "nvenc", "load", "save"]
 
+[project.urls]
+Repository = "https://github.com/HallettVisual/ComfyUI-4K-Video-Save-Load"
+Documentation = "https://github.com/HallettVisual/ComfyUI-4K-Video-Save-Load/blob/main/README.md"
+"Bug Tracker" = "https://github.com/HallettVisual/ComfyUI-4K-Video-Save-Load/issues"
+Homepage = "https://hallett-ai.com"
+
+# Comfy Registry. `version` above is what the registry publishes - bump it every
+# time, the registry rejects a version it has already seen.
 [tool.comfy]
-PublisherId = ""
-DisplayName = "ComfyUI Video 4K"
+# Publisher account at https://registry.comfy.org. Lowercase: the registry has
+# this publisher as "hallettvisual", and a different casing is a different (and
+# non-existent) publisher, which makes the publish fail.
+PublisherId = "hallettvisual"
+DisplayName = "4K Video Save Load - Hallett"
 Icon = ""
