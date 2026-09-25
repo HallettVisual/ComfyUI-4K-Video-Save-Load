@@ -23,3 +23,5 @@ Homepage = "https://hallett-ai.com"
 PublisherId = "hallettvisual"
 DisplayName = "4K Video Save Load - Hallett"
 Icon = ""
+
+# First registry release: 1.0.0
