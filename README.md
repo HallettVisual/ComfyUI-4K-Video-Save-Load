@@ -44,20 +44,30 @@ One node in place of VHS's four loaders.
 - **seconds_cap** — load at most this many seconds. Combined with a model preset the
   frame maths is done for you: 3 s of H3 becomes 56 frames, not 72.
 - **frame_load_cap**, **skip_first_seconds**, **select_every_nth** — as usual.
+- **force_frame_rate** — whole numbers only. 0 keeps the source rate.
 - **audio_when_missing** — `silence` emits a silent track matching the clip length so
   downstream nodes never break on a file with no audio. `none` outputs nothing.
 
-Outputs: `images`, `audio`, `frame_count`, `fps`, `width`, `height`, `video_count`,
-and `info` (a JSON summary of source and loaded properties). `fps` already accounts
-for `force_rate`, the model preset and `select_every_nth`, so it can be wired
+The node shows the chosen file's details in grey as soon as you pick it, before
+running anything, and **reset to file** fills `custom_width`, `custom_height` and
+`force_frame_rate` from the file itself.
+
+Outputs: `images`, `audio`, `frame_count`, `fps`, `width`, `height` and `info` (a
+JSON summary of source and loaded properties). `fps` already accounts for
+`force_frame_rate`, the model preset and `select_every_nth`, so it can be wired
 straight into Save Video 4K.
 
 ## Save Video 4K
 
 `h264`, `hevc` and `av1` on NVENC, `h264`/`hevc` on CPU, or `prores`. `quality` is
 the cq/crf value, lower being better. Audio is muxed when connected. Odd dimensions
-are padded rather than refused. A sidecar `.png` carries the workflow, so the result
-can be dragged back into ComfyUI.
+are padded rather than refused. The finished video plays on the node itself.
+
+**save_metadata** (on by default) stores the workflow in the video file, so the
+result can be dragged back into ComfyUI to rebuild the graph.
+
+**vae** accepts a LATENT on `images` and decodes it in batches, so a long 4K clip
+does not have to fit in VRAM in one go.
 
 ## Colour
 

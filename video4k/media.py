@@ -4,6 +4,7 @@ Decoding always goes through ffmpeg: it scales far faster than doing it after th
 fact in Python, and for 8-bit 4:2:0 sources it can hand us nv12, which is a third
 of the bytes rgb24 would be and leaves the colour conversion to the GPU.
 """
+import json
 import os
 import re
 import shutil
@@ -153,6 +154,17 @@ def decode(path, info, size, start_time=0.0, force_rate=0.0, frame_cap=0,
                     pbar.update(1)
         finally:
             proc.kill()
+
+
+def write_metadata_file(metadata, directory):
+    """An FFMETADATA sidecar, so a long workflow never hits the command line limit."""
+    text = json.dumps(metadata)
+    for char in ("\\", "=", ";", "#", "\n"):
+        text = text.replace(char, "\\" + char)
+    path = os.path.join(directory, "video4k_metadata.txt")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(";FFMETADATA1\ncomment=" + text + "\n")
+    return path
 
 
 def encode(path, args, frames, env=None):

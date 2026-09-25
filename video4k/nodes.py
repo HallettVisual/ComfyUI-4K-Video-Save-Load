@@ -1,13 +1,11 @@
 """Two video nodes: one to load, one to save. Both do their pixel work on the GPU."""
-import datetime
+import itertools
 import json
 import os
 import re
 
 import numpy as np
 import torch
-from PIL import Image
-from PIL.PngImagePlugin import PngInfo
 
 import folder_paths
 from comfy.utils import ProgressBar
@@ -15,6 +13,21 @@ from comfy.utils import ProgressBar
 from . import accel, media
 
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".gif")
+
+
+class MultiInput(str):
+    """A socket that accepts more than one type, as VideoHelperSuite does it."""
+
+    def __new__(cls, string, allowed_types):
+        result = super().__new__(cls, string)
+        result.allowed_types = allowed_types
+        return result
+
+    def __ne__(self, other):
+        return other != "*" and other not in self.allowed_types
+
+
+IMAGE_OR_LATENT = MultiInput("IMAGE", ["IMAGE", "LATENT"])
 
 # fps, the frame-count grid the model accepts as (divisor, remainder), and the
 # multiple its VAE needs each dimension rounded to.
@@ -91,6 +104,18 @@ def list_videos(path):
     return [path]
 
 
+def resolve_video(source, video, path, video_index):
+    """The file a node's source settings point at, and how many it chose from."""
+    if source == "path":
+        if not path.strip():
+            raise RuntimeError("source is set to 'path' but no path was given.")
+        candidates = list_videos(path.strip().strip('"'))
+        if not candidates:
+            raise RuntimeError(f"No video files found in {path}")
+        return candidates[video_index % len(candidates)], len(candidates)
+    return folder_paths.get_annotated_filepath(video), 1
+
+
 class LoadVideo4K:
     @classmethod
     def INPUT_TYPES(cls):
@@ -103,13 +128,13 @@ class LoadVideo4K:
                 "source": (["upload", "path"],),
                 "video": (files or ["(no videos in input folder)"], {"video_upload": True}),
                 "path": ("STRING", {"default": "", "tooltip": "A video file, or a folder to step through with video_index. Used when source is 'path'."}),
-                "video_index": ("INT", {"default": 0, "min": 0, "max": 9999, "tooltip": "Which video in the folder to load. video_count tells you how many there are."}),
+                "video_index": ("INT", {"default": 0, "min": 0, "max": 9999, "tooltip": "Which video in the folder to load."}),
                 "resolution": (list(RESOLUTIONS), {"default": "source"}),
                 "custom_width": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 8}),
                 "custom_height": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 8}),
                 "divisible_by": ([1, 2, 8, 16, 32, 64], {"default": 16}),
                 "model_preset": (list(MODEL_PRESETS), {"default": "none", "tooltip": "Sets frame rate, rounds the size, and snaps the frame count to what the model accepts."}),
-                "force_rate": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 240.0, "step": 0.01, "tooltip": "0 keeps the source rate. The model preset overrides this."}),
+                "force_frame_rate": ("INT", {"default": 0, "min": 0, "max": 240, "tooltip": "0 keeps the source rate. The model preset overrides this."}),
                 "seconds_cap": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3600.0, "step": 0.1, "tooltip": "Load at most this many seconds. 0 is unlimited."}),
                 "frame_load_cap": ("INT", {"default": 0, "min": 0, "max": 100000, "tooltip": "Load at most this many frames. 0 is unlimited."}),
                 "skip_first_seconds": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.01}),
@@ -118,27 +143,18 @@ class LoadVideo4K:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "FLOAT", "INT", "INT", "INT", "STRING")
-    RETURN_NAMES = ("images", "audio", "frame_count", "fps", "width", "height", "video_count", "info")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "FLOAT", "INT", "INT", "STRING")
+    RETURN_NAMES = ("images", "audio", "frame_count", "fps", "width", "height", "info")
     FUNCTION = "load"
     CATEGORY = "Video 4K"
 
     def load(self, source, video, path, video_index, resolution, custom_width, custom_height,
-             divisible_by, model_preset, force_rate, seconds_cap, frame_load_cap,
+             divisible_by, model_preset, force_frame_rate, seconds_cap, frame_load_cap,
              skip_first_seconds, select_every_nth, audio_when_missing):
         if media.ffmpeg_path is None:
             raise RuntimeError("ffmpeg was not found. Install it, or put it on PATH.")
 
-        if source == "path":
-            if not path.strip():
-                raise RuntimeError("source is set to 'path' but no path was given.")
-            candidates = list_videos(path.strip().strip('"'))
-            if not candidates:
-                raise RuntimeError(f"No video files found in {path}")
-            file_path = candidates[video_index % len(candidates)]
-        else:
-            candidates = [video]
-            file_path = folder_paths.get_annotated_filepath(video)
+        file_path, video_count = resolve_video(source, video, path, video_index)
         if not os.path.isfile(file_path):
             raise RuntimeError(f"Not a file: {file_path}")
 
@@ -147,7 +163,7 @@ class LoadVideo4K:
         multiple = max(int(divisible_by), preset.get("multiple", 1))
         size = target_size(info.width, info.height, resolution, custom_width, custom_height, multiple)
 
-        rate = preset.get("fps") or force_rate or 0.0
+        rate = preset.get("fps") or float(force_frame_rate) or 0.0
         output_fps = (rate or info.fps) / select_every_nth
 
         available = info.duration - skip_first_seconds
@@ -168,7 +184,6 @@ class LoadVideo4K:
             cap = fitted
 
         pbar = ProgressBar(cap)
-        # ffmpeg's -frames:v counts frames it outputs, which is after select.
         frames = media.decode(file_path, info, size, start_time=skip_first_seconds,
                               force_rate=rate, frame_cap=cap,
                               select_every_nth=select_every_nth, pbar=pbar)
@@ -176,8 +191,7 @@ class LoadVideo4K:
         if len(images) == 0:
             raise RuntimeError(f"No frames were decoded from {os.path.basename(file_path)}.")
         if "frames" in preset and len(images) != cap:
-            fitted = fit_frame_count(len(images), preset["frames"])
-            images = images[:fitted]
+            images = images[:fit_frame_count(len(images), preset["frames"])]
 
         duration = len(images) / output_fps
         waveform = None
@@ -198,22 +212,27 @@ class LoadVideo4K:
             "loaded_frames": len(images),
             "loaded_duration": round(len(images) / output_fps, 3),
             "has_audio": info.has_audio,
+            "videos_in_folder": video_count,
         }, indent=2)
-        return (images, audio, len(images), float(output_fps), size[0], size[1],
-                len(candidates), summary)
+        return (images, audio, len(images), float(output_fps), size[0], size[1], summary)
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, source, video, path, **kwargs):
+        # Naming `video` here takes it out of the combo check, which would
+        # otherwise reject a workflow using path mode with an empty input folder.
+        if source == "path":
+            return True if path.strip() else "source is 'path' but no path was given."
+        if not video or not folder_paths.exists_annotated_filepath(video):
+            return f"Video not found: {video}"
+        return True
 
     @classmethod
     def IS_CHANGED(cls, source, video, path, video_index, **kwargs):
-        target = path if source == "path" else video
         try:
-            if source == "path":
-                files = list_videos(path.strip().strip('"'))
-                target = files[video_index % len(files)] if files else path
-            else:
-                target = folder_paths.get_annotated_filepath(video)
+            target = resolve_video(source, video, path, video_index)[0]
             return f"{target}:{os.path.getmtime(target)}"
         except Exception:
-            return target
+            return path if source == "path" else video
 
 
 class SaveVideo4K:
@@ -221,15 +240,17 @@ class SaveVideo4K:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "images": ("IMAGE",),
+                "images": (IMAGE_OR_LATENT,),
                 "fps": ("FLOAT", {"default": 24.0, "min": 0.01, "max": 240.0, "step": 0.01}),
                 "filename_prefix": ("STRING", {"default": "video4k/clip"}),
                 "encoder": (list(ENCODERS), {"default": "h264 (nvenc)"}),
                 "quality": ("INT", {"default": 19, "min": 1, "max": 51, "tooltip": "Lower is better quality and a bigger file. Ignored by prores."}),
+                "save_metadata": ("BOOLEAN", {"default": True, "tooltip": "Store the workflow in the video file so it can be dragged back into ComfyUI."}),
                 "save_output": ("BOOLEAN", {"default": True}),
             },
             "optional": {
                 "audio": ("AUDIO",),
+                "vae": ("VAE", {"tooltip": "Only needed when a LATENT is connected to images."}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -240,17 +261,22 @@ class SaveVideo4K:
     FUNCTION = "save"
     CATEGORY = "Video 4K"
 
-    def save(self, images, fps, filename_prefix, encoder, quality, save_output,
-             audio=None, prompt=None, extra_pnginfo=None):
+    def save(self, images, fps, filename_prefix, encoder, quality, save_metadata, save_output,
+             audio=None, vae=None, prompt=None, extra_pnginfo=None):
         if media.ffmpeg_path is None:
             raise RuntimeError("ffmpeg was not found. Install it, or put it on PATH.")
+
+        if isinstance(images, dict) and "samples" in images:
+            if vae is None:
+                raise RuntimeError("A LATENT is connected to images, so a VAE must be connected too.")
+            images = self.decode_latents(images["samples"], vae)
         if len(images) == 0:
             raise RuntimeError("No frames to save.")
 
         spec = ENCODERS[encoder]
         output_dir = (folder_paths.get_output_directory() if save_output
                       else folder_paths.get_temp_directory())
-        full_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+        full_folder, filename, _, subfolder, _ = folder_paths.get_save_image_path(
             filename_prefix, output_dir, images.shape[2], images.shape[1])
         os.makedirs(full_folder, exist_ok=True)
         # get_save_image_path only counts .png, so find our own next free number.
@@ -269,8 +295,16 @@ class SaveVideo4K:
             width, height = width + pad_w, height + pad_h
 
         args = [media.ffmpeg_path, "-v", "error", "-y", "-f", "rawvideo",
-                "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "-",
-                "-c:v", spec["codec"], "-pix_fmt", spec["pix_fmt"]]
+                "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "-"]
+        if save_metadata:
+            metadata = dict(extra_pnginfo or {})
+            if prompt is not None:
+                metadata["prompt"] = prompt
+            if metadata:
+                os.makedirs(folder_paths.get_temp_directory(), exist_ok=True)
+                meta_file = media.write_metadata_file(metadata, folder_paths.get_temp_directory())
+                args += ["-i", meta_file, "-map_metadata", "1", "-metadata", "creation_time=now"]
+        args += ["-c:v", spec["codec"], "-pix_fmt", spec["pix_fmt"]]
         if spec["quality"] == "cq":
             args += ["-rc", "vbr", "-cq", str(quality), "-b:v", "0", "-preset", "p5"]
         elif spec["quality"] == "crf":
@@ -278,15 +312,14 @@ class SaveVideo4K:
         args += spec.get("extra", [])
 
         video_path = os.path.join(full_folder, f"{filename}_{counter:05}.{spec['ext']}")
-        frames = (accel.tensor_to_bytes(image).tobytes() for image in images)
         pbar = ProgressBar(len(images))
 
-        def counted():
-            for frame in frames:
+        def frames():
+            for image in images:
                 pbar.update(1)
-                yield frame
+                yield accel.tensor_to_bytes(image).tobytes()
 
-        media.encode(video_path, args, counted())
+        media.encode(video_path, args, frames())
         final_path = video_path
 
         waveform = audio.get("waveform") if isinstance(audio, dict) else None
@@ -297,22 +330,21 @@ class SaveVideo4K:
                             int(audio.get("sample_rate", 44100)), ["-c:a", "aac", "-b:a", "192k"])
             final_path = muxed
 
-        # A sidecar png so the workflow can be dragged back in, like Save Image.
-        if prompt is not None or extra_pnginfo is not None:
-            metadata = PngInfo()
-            if prompt is not None:
-                metadata.add_text("prompt", json.dumps(prompt))
-            for key, value in (extra_pnginfo or {}).items():
-                metadata.add_text(key, json.dumps(value))
-            metadata.add_text("CreationTime", datetime.datetime.now().isoformat(" ")[:19])
-            Image.fromarray(accel.tensor_to_bytes(images[0])).save(
-                os.path.join(full_folder, f"{filename}_{counter:05}.png"),
-                pnginfo=metadata, compress_level=1)
-
+        # Matches comfy_api's PreviewVideo, so the built-in player renders it.
         preview = {"filename": os.path.basename(final_path), "subfolder": subfolder,
-                   "type": "output" if save_output else "temp", "format": f"video/{spec['ext']}",
-                   "frame_rate": fps, "fullpath": final_path}
-        return {"ui": {"gifs": [preview]}, "result": (final_path,)}
+                   "type": "output" if save_output else "temp"}
+        return {"ui": {"images": [preview], "animated": (True,)}, "result": (final_path,)}
+
+    def decode_latents(self, samples, vae):
+        """Decode in batches so a long 4K clip does not have to fit in VRAM at once."""
+        per_batch = max(1, (1920 * 1080 * 16) // (samples.shape[-1] * samples.shape[-2] * 64))
+        batches = [vae.decode(samples[i:i + per_batch])
+                   for i in range(0, len(samples), per_batch)]
+        decoded = torch.cat(batches)
+        # Some VAEs hand back 5D video batches; flatten to a plain frame list.
+        if decoded.dim() == 5:
+            decoded = decoded.reshape(-1, *decoded.shape[-3:])
+        return decoded
 
 
 NODE_CLASS_MAPPINGS = {
