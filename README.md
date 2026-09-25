@@ -1,23 +1,15 @@
 # ComfyUI 4K Video Save Load
 
-Similar to the VideoHelperSuite video nodes, but with the file's information
-exposed on the node and much faster load and save for large files. Two nodes that
-do their per-pixel work on the GPU, so 4K stops being the slow part of a workflow.
+Similar to the VideoHelperSuite video nodes, but with the file's information exposed on the node and much faster load and save for large files. Two nodes that do their per-pixel work on the GPU, so 4K stops being the slow part of a workflow.
 
-Independent of VideoHelperSuite: it is not a fork and shares no code with it, so
-both can be installed at once.
+Independent of VideoHelperSuite: it is not a fork and shares no code with it, so both can be installed at once.
+
+<img width="344" height="1085" alt="4K_Load_Screencap" src="https://github.com/user-attachments/assets/989aaa4a-3030-4026-8521-a1860ee8ab19" />
 
 ## Speed
 
 Measured on an RTX 5090 at 3840x2160 with an idle GPU, milliseconds per frame.
 Load is 100 frames, best of two runs; save is 60 frames.
-
-| | VideoHelperSuite | Video 4K | |
-| --- | --- | --- | --- |
-| Load, full resolution | 377.9 | **20.1** | 18.8x |
-| Load, scaled to 1080p | 45.6 | **9.0** | 5.1x |
-| Save, h264 nvenc | 87.8 | **30.9** | 2.8x |
-| Save, h264 cpu | 104.2 | **39.4** | 2.6x |
 
 VHS's OpenCV loader reads full-resolution 4K at 43.5 ms/frame, so the ffmpeg path
 here is faster than either of the loaders it replaces. Measure with an idle GPU:
