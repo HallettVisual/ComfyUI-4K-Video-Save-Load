@@ -1,4 +1,4 @@
-# ComfyUI 4K Video Save Load
+# ComfyUI 4K Faster Video Loader and Saver with Fun Features
 
 Similar to the VideoHelperSuite video nodes, but with the file's information exposed on the node and much faster load and save for large files. Two nodes that do their per-pixel work on the GPU, so 4K stops being the slow part of a workflow.  
 
