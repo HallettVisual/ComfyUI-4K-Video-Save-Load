@@ -48,9 +48,13 @@ One node in place of VHS's four loaders.
 - **audio_when_missing** — `silence` emits a silent track matching the clip length so
   downstream nodes never break on a file with no audio. `none` outputs nothing.
 
-The node shows the chosen file's details in grey as soon as you pick it, before
-running anything, and **reset to file** fills `custom_width`, `custom_height` and
-`force_frame_rate` from the file itself.
+Widgets that accept 0 for "auto" show in grey what that 0 will actually resolve
+to, recomputed live from every other setting. Skip 2 seconds of a 13.6s 25fps clip
+and `frame_load_cap` reads `290<-`, `seconds_cap` reads `11.6<-`. Each of those
+widgets has a small button beside it: reset for a value, disable for a limit.
+
+The file's own details also appear in grey at the bottom of the node as soon as you
+pick it, before running anything.
 
 Outputs: `images`, `audio`, `frame_count`, `fps`, `width`, `height` and `info` (a
 JSON summary of source and loaded properties). `fps` already accounts for
