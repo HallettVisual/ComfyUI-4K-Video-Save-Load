@@ -133,6 +133,9 @@ def decode(path, info, size, start_time=0.0, force_rate=0.0, frame_cap=0,
         filters.append(f"scale={size[0]}:{size[1]}:flags=lanczos")
     if filters:
         args += ["-vf", ",".join(filters)]
+    if select_every_nth > 1:
+        # Otherwise ffmpeg refills the dropped frames with duplicates to hold the rate.
+        args += ["-fps_mode", "passthrough"]
     if frame_cap > 0:
         args += ["-frames:v", str(frame_cap)]
     args += ["-pix_fmt", pix_fmt, "-f", "rawvideo", "-"]
@@ -154,6 +157,18 @@ def decode(path, info, size, start_time=0.0, force_rate=0.0, frame_cap=0,
                     pbar.update(1)
         finally:
             proc.kill()
+
+
+def exact_rate(fps):
+    """fps as ffmpeg should get it, with NTSC rates written exactly: 23.98 becomes 24000/1001.
+
+    ffmpeg prints rates to two decimals, so a clip's 23.976 reaches us as 23.98. Real
+    rates like 24 sit 0.1% from their NTSC neighbour, far outside the tolerance.
+    """
+    base = round(fps * 1.001)
+    if base and abs(fps * 1.001 / base - 1) < 5e-4:
+        return f"{base * 1000}/1001"
+    return str(fps)
 
 
 def write_metadata_file(metadata, directory):
@@ -189,7 +204,7 @@ def mux_audio(video_path, output_path, waveform, sample_rate, audio_args):
     channels = waveform.size(0)
     args = [ffmpeg_path, "-v", "error", "-y", "-i", video_path,
             "-ar", str(sample_rate), "-ac", str(channels), "-f", "f32le", "-i", "-",
-            "-c:v", "copy"] + audio_args + ["-shortest", output_path]
+            "-c:v", "copy"] + audio_args + [output_path]
     data = waveform.transpose(0, 1).contiguous().numpy().tobytes()
     result = subprocess.run(args, input=data, capture_output=True)
     if result.returncode != 0:

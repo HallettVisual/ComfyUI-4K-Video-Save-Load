@@ -11,6 +11,13 @@ Independent of VideoHelperSuite: it is not a fork and shares no code with it, so
 Measured on an RTX 5090 at 3840x2160 with an idle GPU, milliseconds per frame.
 Load is 100 frames, best of two runs; save is 60 frames.
 
+| | VideoHelperSuite | Video 4K | |
+| --- | --- | --- | --- |
+| Load, full resolution | 377.9 | **20.1** | 18.8x |
+| Load, scaled to 1080p | 45.6 | **9.0** | 5.1x |
+| Save, h264 nvenc | 87.8 | **30.9** | 2.8x |
+| Save, h264 cpu | 104.2 | **39.4** | 2.6x |
+
 VHS's OpenCV loader reads full-resolution 4K at 43.5 ms/frame, so the ffmpeg path
 here is faster than either of the loaders it replaces. Measure with an idle GPU:
 a render in the background inflates these several times over.
@@ -20,12 +27,17 @@ a render in the background inflates these several times over.
 One node in place of VHS's four loaders.
 
 - **source** — `upload` uses the picker, `path` takes a file **or a folder**. For a
-  folder, `video_index` chooses which clip and `video_count` tells you how many
-  there are, so a queue can walk a whole directory.
+  folder, `video_index` chooses which clip and the file details show how many there
+  are, so a queue can walk a whole directory.
+- **Drag and drop** — drop a clip anywhere on the node, preview included. Drops and
+  the picker take `.mp4`, `.mov`, `.mkv`, `.webm`, `.avi`, `.m4v` and `.gif`.
 - **resolution** — `source`, `2160p`, `1440p`, `1080p`, `720p`, `480p`,
-  `2048 wide`, `1920 wide`, `1024 wide`, or `custom`. Aspect ratio is kept; set one
-  of `custom_width` / `custom_height` and the other follows. Scaling happens inside
-  ffmpeg, which is far faster than resizing after decode.
+  `2048 wide`, `1920 wide`, `1024 wide`, or `custom`. Each preset sets the
+  **longest** side (2160p is 3840, 1080p is 1920), so portrait clips get the same
+  class of size as landscape ones. Aspect ratio is kept. Picking one fills in
+  `custom_width` / `custom_height` with the size the clip will load at; typing in
+  either switches to `custom`, and leaving one at 0 makes it follow the aspect.
+  Scaling happens inside ffmpeg, which is far faster than resizing after decode.
 - **divisible_by** — rounds both dimensions. The model preset raises it if needed.
 - **model_preset** — sets the frame rate, the size rounding, and snaps the frame
   count to what the model actually accepts:
@@ -37,31 +49,51 @@ One node in place of VHS's four loaders.
   | Wan | 16 | 4n + 1 | 16 |
   | Hunyuan | 24 | 4n + 1 | 16 |
 
-- **seconds_cap** — load at most this many seconds. Combined with a model preset the
-  frame maths is done for you: 3 s of H3 becomes 56 frames, not 72.
-- **frame_load_cap**, **skip_first_seconds**, **select_every_nth** — as usual.
+  As in VHS, the preset also makes `frame_load_cap` step through those counts: with
+  H3 its arrows go 5, 22, 39, 56 and a typed value snaps to the nearest one.
+- **seconds_cap**, **frame_load_cap** — show the length of the whole clip until you
+  change one, and the other follows it. Combined with a model preset the frame maths
+  is done for you: 3 s of H3 becomes 56 frames, not 72. ↺ goes back to the whole clip.
+- **skip_first_seconds**, **select_every_nth** — as usual.
 - **force_frame_rate** — whole numbers only. 0 keeps the source rate.
 - **audio_when_missing** — `silence` emits a silent track matching the clip length so
   downstream nodes never break on a file with no audio. `none` outputs nothing.
 
-Widgets that accept 0 for "auto" show in grey what that 0 will actually resolve
-to, recomputed live from every other setting. Skip 2 seconds of a 13.6s 25fps clip
-and `frame_load_cap` reads `290<-`, `seconds_cap` reads `11.6<-`. Each of those
-widgets has a small button beside it: reset for a value, disable for a limit.
+When a widget's own value is not what will load, the real value shows beside it in
+grey, recomputed live from every other setting: ask for 158 frames of a clip that
+has 141 and `frame_load_cap` reads `141← 158`. The ↺ beside the size, rate and cap
+widgets puts the clip's own value back, and is dimmed when there is nothing to reset.
+**reset all to defaults** does every setting at once and keeps the chosen clip.
 
 The file's own details also appear in grey at the bottom of the node as soon as you
-pick it, before running anything.
+pick it, before running anything, with the part that will load: `loads 1.5s to 4.2s
+(2.7s, 65 frames)`. Picking, uploading or dropping a new clip resets the settings to
+their defaults; opening a saved workflow does not.
 
-Outputs: `images`, `audio`, `frame_count`, `fps`, `width`, `height` and `info` (a
-JSON summary of source and loaded properties). `fps` already accounts for
+The preview plays only that part, looping it, and jumps to the new start or end as
+you change `skip_first_seconds` or a cap. Switch **preview** to `whole clip` to scrub
+the entire file, then **set start here** and **set end here** mark the part to load
+from where the preview is.
+
+Outputs: `images`, `audio`, `frame_count`, `fps`, `width`, `height`, `info` (a
+JSON summary of source and loaded properties) and `video`, the same frames and audio
+as a VIDEO for nodes that take one. `fps` already accounts for
 `force_frame_rate`, the model preset and `select_every_nth`, so it can be wired
 straight into Save Video 4K.
 
 ## Save Video 4K
 
-`h264`, `hevc` and `av1` on NVENC, `h264`/`hevc` on CPU, or `prores`. `quality` is
-the cq/crf value, lower being better. Audio is muxed when connected. Odd dimensions
-are padded rather than refused. The finished video plays on the node itself.
+`images` takes an IMAGE batch, a LATENT, or a VIDEO, such as Load Video 4K's `video`
+output or ComfyUI's own Load Video. A VIDEO brings its own frame rate and audio; a
+connected `audio` input still wins.
+
+`h264`, `hevc` and `av1` on NVENC, `h264`/`hevc` on CPU, `prores`, or
+`hevc 10-bit (nvenc)`. `quality` is the cq/crf value, lower being better. ProRes and
+10-bit HEVC are fed 16 bits per channel, so gradients keep their full 10 bits, and
+ProRes carries uncompressed 24-bit audio. Audio is muxed when connected, trimmed to
+the picture so no frames are lost. 23.976, 29.97 and 59.94 fps are written as the
+exact NTSC rates. Odd dimensions are padded rather than refused. The finished video
+plays on the node itself.
 
 **save_metadata** (on by default) stores the workflow in the video file, so the
 result can be dragged back into ComfyUI to rebuild the graph.
@@ -78,6 +110,9 @@ ffmpeg's own converter, which carries a systematic -1.24/255 darkening.
 Untagged files get the matrix every player assumes (bt709 at 720p and above, bt601
 below) rather than ffmpeg's blanket bt601, which tints HD footage. Sources with
 alpha, more than 8 bits, or other chroma layouts use a matching ffmpeg conversion.
+
+Saved files are converted with the bt709 matrix and tagged bt709 / sRGB, as ComfyUI's
+own Save Video does, so players show the colours that were rendered.
 
 ## Requirements
 

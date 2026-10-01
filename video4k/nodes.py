@@ -1,33 +1,20 @@
 """Two video nodes: one to load, one to save. Both do their pixel work on the GPU."""
-import itertools
 import json
+import math
 import os
 import re
+from fractions import Fraction
 
 import numpy as np
 import torch
 
 import folder_paths
 from comfy.utils import ProgressBar
+from comfy_api.latest import Input, InputImpl, Types
 
 from . import accel, media
 
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".gif")
-
-
-class MultiInput(str):
-    """A socket that accepts more than one type, as VideoHelperSuite does it."""
-
-    def __new__(cls, string, allowed_types):
-        result = super().__new__(cls, string)
-        result.allowed_types = allowed_types
-        return result
-
-    def __ne__(self, other):
-        return other != "*" and other not in self.allowed_types
-
-
-IMAGE_OR_LATENT = MultiInput("IMAGE", ["IMAGE", "LATENT"])
 
 # fps, the frame-count grid the model accepts as (divisor, remainder), and the
 # multiple its VAE needs each dimension rounded to.
@@ -39,17 +26,18 @@ MODEL_PRESETS = {
     "Hunyuan": {"fps": 24, "frames": (4, 1), "multiple": 16},
 }
 
-# Target the named edge, keeping aspect ratio.
+# Size of the longest side, keeping aspect ratio, so a portrait clip gets the same
+# class of resolution as a landscape one.
 RESOLUTIONS = {
     "source": None,
-    "2160p (4K)": ("height", 2160),
-    "1440p": ("height", 1440),
-    "1080p": ("height", 1080),
-    "720p": ("height", 720),
-    "480p": ("height", 480),
-    "2048 wide": ("width", 2048),
-    "1920 wide": ("width", 1920),
-    "1024 wide": ("width", 1024),
+    "2160p (4K)": 3840,
+    "1440p": 2560,
+    "1080p": 1920,
+    "720p": 1280,
+    "480p": 854,
+    "2048 wide": 2048,
+    "1920 wide": 1920,
+    "1024 wide": 1024,
     "custom": None,
 }
 
@@ -61,13 +49,22 @@ ENCODERS = {
     "h264 (cpu)": {"codec": "libx264", "ext": "mp4", "quality": "crf", "pix_fmt": "yuv420p"},
     "hevc (cpu)": {"codec": "libx265", "ext": "mp4", "quality": "crf", "pix_fmt": "yuv420p",
                    "extra": ["-tag:v", "hvc1"]},
-    "prores": {"codec": "prores_ks", "ext": "mov", "quality": None, "pix_fmt": "yuv422p10le",
-               "extra": ["-profile:v", "3"]},
+    "prores": {"codec": "prores_ks", "ext": "mov", "quality": None, "pix_fmt": "yuv422p10le", "bits": 16,
+               "extra": ["-profile:v", "3"], "audio": ["-c:a", "pcm_s24le"]},
+    "hevc 10-bit (nvenc)": {"codec": "hevc_nvenc", "ext": "mp4", "quality": "cq", "pix_fmt": "p010le", "bits": 16,
+                            "extra": ["-profile:v", "main10", "-tag:v", "hvc1"]},
 }
+
+# Convert and tag as ComfyUI's own Save Video does: bt709 matrix and primaries, sRGB
+# transfer, limited range. Left to itself ffmpeg converts with bt601 and tags nothing,
+# and players then show HD and 4K with shifted colours.
+COLOUR_ARGS = ["-vf", "scale=out_color_matrix=bt709:out_range=tv,"
+                      "setparams=colorspace=bt709:color_primaries=bt709:color_trc=iec61966-2-1:range=tv"]
 
 
 def round_to(value, multiple):
-    return max(multiple, int(round(value / multiple)) * multiple)
+    # Halves round up, as Math.round does in the node's preview of this size.
+    return max(multiple, int(value / multiple + 0.5) * multiple)
 
 
 def target_size(width, height, resolution, custom_width, custom_height, multiple):
@@ -81,11 +78,8 @@ def target_size(width, height, resolution, custom_width, custom_height, multiple
         elif custom_height:
             width, height = width * custom_height / height, custom_height
     elif preset is not None:
-        edge, size = preset
-        if edge == "height":
-            width, height = width * size / height, size
-        else:
-            height, width = height * size / width, size
+        scale = preset / max(width, height)
+        width, height = width * scale, height * scale
     return round_to(width, multiple), round_to(height, multiple)
 
 
@@ -129,22 +123,22 @@ class LoadVideo4K:
                 "video": (files or ["(no videos in input folder)"], {"video_upload": True}),
                 "path": ("STRING", {"default": "", "tooltip": "A video file, or a folder to step through with video_index. Used when source is 'path'."}),
                 "video_index": ("INT", {"default": 0, "min": 0, "max": 9999, "tooltip": "Which video in the folder to load."}),
-                "resolution": (list(RESOLUTIONS), {"default": "source"}),
+                "resolution": (list(RESOLUTIONS), {"default": "source", "tooltip": "Sets the longest side, keeping aspect ratio: 2160p is 3840, 1080p is 1920. Fills in custom_width and custom_height; editing either switches to custom."}),
                 "custom_width": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 8}),
                 "custom_height": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 8}),
                 "divisible_by": ([1, 2, 8, 16, 32, 64], {"default": 16}),
                 "model_preset": (list(MODEL_PRESETS), {"default": "none", "tooltip": "Sets frame rate, rounds the size, and snaps the frame count to what the model accepts."}),
                 "force_frame_rate": ("INT", {"default": 0, "min": 0, "max": 240, "tooltip": "0 keeps the source rate. The model preset overrides this."}),
-                "seconds_cap": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3600.0, "step": 0.1, "tooltip": "Load at most this many seconds. 0 is unlimited."}),
-                "frame_load_cap": ("INT", {"default": 0, "min": 0, "max": 100000, "tooltip": "Load at most this many frames. 0 is unlimited."}),
-                "skip_first_seconds": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.01}),
+                "seconds_cap": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3600.0, "step": 0.1, "tooltip": "Load at most this many seconds. Shows the whole clip until you change it; the reset button goes back to that."}),
+                "frame_load_cap": ("INT", {"default": 0, "min": 0, "max": 100000, "tooltip": "Load at most this many frames. Shows the whole clip until you change it; the reset button goes back to that. A model preset makes it step through the counts the model accepts."}),
+                "skip_first_seconds": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.1}),
                 "select_every_nth": ("INT", {"default": 1, "min": 1, "max": 100}),
                 "audio_when_missing": (["silence", "none"], {"default": "silence", "tooltip": "What to output when the file has no audio track. 'silence' keeps downstream nodes working."}),
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "FLOAT", "INT", "INT", "STRING")
-    RETURN_NAMES = ("images", "audio", "frame_count", "fps", "width", "height", "info")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "FLOAT", "INT", "INT", "STRING", "VIDEO")
+    RETURN_NAMES = ("images", "audio", "frame_count", "fps", "width", "height", "info", "video")
     FUNCTION = "load"
     CATEGORY = "Video 4K"
 
@@ -170,17 +164,19 @@ class LoadVideo4K:
         if available <= 0:
             raise RuntimeError(f"skip_first_seconds ({skip_first_seconds}) is past the end of a "
                                f"{info.duration:.2f}s video.")
-        cap = int(available * (rate or info.fps) / select_every_nth)
+        source_frames = int(available * (rate or info.fps))
         if seconds_cap > 0:
-            cap = min(cap, int(seconds_cap * output_fps))
+            source_frames = min(source_frames, int(seconds_cap * (rate or info.fps)))
+        # select keeps frames 0, n, 2n..., so a partial stride still yields a frame.
+        cap = -(-source_frames // select_every_nth)
         if frame_load_cap > 0:
             cap = min(cap, frame_load_cap)
         if "frames" in preset:
             fitted = fit_frame_count(cap, preset["frames"])
             if fitted == 0:
                 divisor, remainder = preset["frames"]
-                raise RuntimeError(f"{model_preset} needs at least {remainder} frames but only "
-                                   f"{cap} are available. Lower skip_first_seconds, or raise the caps.")
+                raise RuntimeError(f"{model_preset} needs at least {remainder} frames, but these settings give {cap}. "
+                                   f"Lower select_every_nth or skip_first_seconds, or raise the caps.")
             cap = fitted
 
         pbar = ProgressBar(cap)
@@ -214,7 +210,10 @@ class LoadVideo4K:
             "has_audio": info.has_audio,
             "videos_in_folder": video_count,
         }, indent=2)
-        return (images, audio, len(images), float(output_fps), size[0], size[1], summary)
+        # The same frames and audio as the other outputs, for nodes that take VIDEO.
+        video = InputImpl.VideoFromComponents(
+            Types.VideoComponents(images=images, audio=audio, frame_rate=Fraction(output_fps)))
+        return (images, audio, len(images), float(output_fps), size[0], size[1], summary, video)
 
     @classmethod
     def VALIDATE_INPUTS(cls, source, video, path, **kwargs):
@@ -240,8 +239,8 @@ class SaveVideo4K:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "images": (IMAGE_OR_LATENT,),
-                "fps": ("FLOAT", {"default": 24.0, "min": 0.01, "max": 240.0, "step": 0.01}),
+                "images": ("IMAGE,LATENT,VIDEO", {"tooltip": "Frames to save: an IMAGE batch, a LATENT (connect the vae too), or a VIDEO."}),
+                "fps": ("FLOAT", {"default": 24.0, "min": 0.01, "max": 240.0, "step": 1, "tooltip": "Ignored for a VIDEO, which carries its own rate. Shown as a whole number, but a typed or wired 23.976, 29.97 or 59.94 is kept and written exactly."}),
                 "filename_prefix": ("STRING", {"default": "video4k/clip"}),
                 "encoder": (list(ENCODERS), {"default": "h264 (nvenc)"}),
                 "quality": ("INT", {"default": 19, "min": 1, "max": 51, "tooltip": "Lower is better quality and a bigger file. Ignored by prores."}),
@@ -266,7 +265,12 @@ class SaveVideo4K:
         if media.ffmpeg_path is None:
             raise RuntimeError("ffmpeg was not found. Install it, or put it on PATH.")
 
-        if isinstance(images, dict) and "samples" in images:
+        if isinstance(images, Input.Video):
+            components = images.get_components()
+            images, fps = components.images, float(components.frame_rate)
+            if audio is None:
+                audio = components.audio
+        elif isinstance(images, dict) and "samples" in images:
             if vae is None:
                 raise RuntimeError("A LATENT is connected to images, so a VAE must be connected too.")
             images = self.decode_latents(images["samples"], vae)
@@ -294,8 +298,10 @@ class SaveVideo4K:
             ).permute(0, 2, 3, 1)
             width, height = width + pad_w, height + pad_h
 
+        deep = spec.get("bits") == 16
         args = [media.ffmpeg_path, "-v", "error", "-y", "-f", "rawvideo",
-                "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "-"]
+                "-pix_fmt", "rgb48le" if deep else "rgb24", "-s", f"{width}x{height}",
+                "-r", media.exact_rate(fps), "-i", "-"]
         if save_metadata:
             metadata = dict(extra_pnginfo or {})
             if prompt is not None:
@@ -304,7 +310,7 @@ class SaveVideo4K:
                 os.makedirs(folder_paths.get_temp_directory(), exist_ok=True)
                 meta_file = media.write_metadata_file(metadata, folder_paths.get_temp_directory())
                 args += ["-i", meta_file, "-map_metadata", "1", "-metadata", "creation_time=now"]
-        args += ["-c:v", spec["codec"], "-pix_fmt", spec["pix_fmt"]]
+        args += COLOUR_ARGS + ["-c:v", spec["codec"], "-pix_fmt", spec["pix_fmt"]]
         if spec["quality"] == "cq":
             args += ["-rc", "vbr", "-cq", str(quality), "-b:v", "0", "-preset", "p5"]
         elif spec["quality"] == "crf":
@@ -314,10 +320,12 @@ class SaveVideo4K:
         video_path = os.path.join(full_folder, f"{filename}_{counter:05}.{spec['ext']}")
         pbar = ProgressBar(len(images))
 
+        to_raw = accel.tensor_to_shorts if deep else accel.tensor_to_bytes
+
         def frames():
             for image in images:
                 pbar.update(1)
-                yield accel.tensor_to_bytes(image).tobytes()
+                yield to_raw(image).tobytes()
 
         media.encode(video_path, args, frames())
         final_path = video_path
@@ -325,9 +333,12 @@ class SaveVideo4K:
         waveform = audio.get("waveform") if isinstance(audio, dict) else None
         if waveform is not None and waveform.numel() > 0:
             track = waveform[0] if waveform.dim() == 3 else waveform
+            sample_rate = int(audio.get("sample_rate", 44100))
+            # Trim here: ffmpeg's -shortest drops the last few video frames.
+            track = track[:, :math.ceil(len(images) / fps * sample_rate)]
             muxed = os.path.join(full_folder, f"{filename}_{counter:05}-audio.{spec['ext']}")
-            media.mux_audio(video_path, muxed, track,
-                            int(audio.get("sample_rate", 44100)), ["-c:a", "aac", "-b:a", "192k"])
+            media.mux_audio(video_path, muxed, track, sample_rate,
+                            spec.get("audio", ["-c:a", "aac", "-b:a", "192k"]))
             final_path = muxed
 
         # Matches comfy_api's PreviewVideo, so the built-in player renders it.
