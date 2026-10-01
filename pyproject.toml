@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-4k-video-save-load"
-version = "1.0.0"
+version = "1.1.0"
 description = "Similar to the VHS video nodes, but with file info exposed on the node and much faster load and save for large files."
 readme = "README.md"
 license = { file = "LICENSE" }
