@@ -87,9 +87,9 @@ function effectiveFrames(node, info) {
     const rate = readRate(node, info);
     const available = info.duration - number(node, "skip_first_seconds");
     if (available <= 0) return 0;
-    let frames = Math.floor(available * rate);
+    let frames = Math.floor(available * rate + 1e-6);
     const seconds = cap(node, "seconds_cap");
-    if (seconds > 0) frames = Math.min(frames, Math.floor(seconds * rate));
+    if (seconds > 0) frames = Math.min(frames, Math.floor(seconds * rate + 1e-6));
     let count = Math.ceil(frames / every(node));
     const limit = cap(node, "frame_load_cap");
     if (limit > 0) count = Math.min(count, limit);

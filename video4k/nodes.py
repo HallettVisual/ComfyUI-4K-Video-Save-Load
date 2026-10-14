@@ -164,9 +164,9 @@ class LoadVideo4K:
         if available <= 0:
             raise RuntimeError(f"skip_first_seconds ({skip_first_seconds}) is past the end of a "
                                f"{info.duration:.2f}s video.")
-        source_frames = int(available * (rate or info.fps))
+        source_frames = int(available * (rate or info.fps) + 1e-6)
         if seconds_cap > 0:
-            source_frames = min(source_frames, int(seconds_cap * (rate or info.fps)))
+            source_frames = min(source_frames, int(seconds_cap * (rate or info.fps) + 1e-6))
         # select keeps frames 0, n, 2n..., so a partial stride still yields a frame.
         cap = -(-source_frames // select_every_nth)
         if frame_load_cap > 0:

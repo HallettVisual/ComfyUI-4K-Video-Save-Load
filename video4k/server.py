@@ -24,7 +24,7 @@ async def probe_video(request):
         "width": info.width,
         "height": info.height,
         "fps": round(info.fps, 3),
-        "duration": round(info.duration, 3),
+        "duration": info.duration,
         "frames": info.frame_count,
         "has_audio": info.has_audio,
         "videos_in_folder": count,

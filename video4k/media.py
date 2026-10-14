@@ -67,7 +67,9 @@ class Probe:
 
 
 def probe(path):
-    args = [ffmpeg_path, "-hide_banner", "-i", path, "-frames:v", "1", "-f", "null", "-"]
+    # Copying the video stream to nowhere demuxes without decoding, so counting every
+    # frame costs about what decoding the first one did.
+    args = [ffmpeg_path, "-hide_banner", "-i", path, "-map", "0:v:0", "-c", "copy", "-f", "null", "-"]
     result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     text = result.stderr.decode(*ENCODE_ARGS)
 
@@ -92,6 +94,11 @@ def probe(path):
     dur_match = re.search(r"Duration: (\d+):(\d+):([\d.]+)", text)
     if dur_match:
         duration = int(dur_match.group(1)) * 3600 + int(dur_match.group(2)) * 60 + float(dur_match.group(3))
+    # The container's duration is rounded to centiseconds and can be the audio's
+    # length, which loses or invents a frame; the frame count is exact.
+    counted = re.findall(r"frame=\s*(\d+)", text)
+    if counted and int(counted[-1]) > 0:
+        duration = int(counted[-1]) / fps
     has_audio = re.search(r"^ *Stream .* Audio:", text, re.M) is not None
     return Probe(width, height, fps, duration, pix_fmt, tags, alpha, has_audio)
 
