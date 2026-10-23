@@ -18,8 +18,6 @@ ENCODE_ARGS = ("utf-8", "backslashreplace")
 
 
 def _find_ffmpeg():
-    if "VHS_FORCE_FFMPEG_PATH" in os.environ:
-        return os.environ["VHS_FORCE_FFMPEG_PATH"]
     system = shutil.which("ffmpeg")
     if system is not None:
         return system

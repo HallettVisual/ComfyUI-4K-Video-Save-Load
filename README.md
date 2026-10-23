@@ -26,7 +26,8 @@ a render in the background inflates these several times over.
 
 One node in place of VHS's four loaders.
 
-- **source** — `upload` uses the picker, `path` takes a file **or a folder**. For a
+- **source** — `upload` uses the picker, `path` takes a file **or a folder** inside
+  ComfyUI's input, output or temp folder (relative paths start in input). For a
   folder, `video_index` chooses which clip and the file details show how many there
   are, so a queue can walk a whole directory.
 - **Drag and drop** — drop a clip anywhere on the node, preview included. Drops and

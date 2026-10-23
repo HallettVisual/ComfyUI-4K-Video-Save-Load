@@ -17,8 +17,9 @@ async def probe_video(request):
         if not os.path.isfile(path):
             return web.json_response({"error": "not found"}, status=404)
         info = media.probe(path)
-    except Exception as error:
-        return web.json_response({"error": str(error)}, status=400)
+    except Exception:
+        # Say nothing about why, so the route can't be used to learn about other files.
+        return web.json_response({"error": "unreadable"}, status=400)
     return web.json_response({
         "file": os.path.basename(path),
         "width": info.width,

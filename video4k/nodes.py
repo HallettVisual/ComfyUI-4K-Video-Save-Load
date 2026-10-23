@@ -91,9 +91,18 @@ def fit_frame_count(count, grid):
     return ((count - remainder) // divisor) * divisor + remainder
 
 
+def contained(target):
+    """Only read inside ComfyUI's input, output and temp folders."""
+    roots = (folder_paths.get_input_directory(), folder_paths.get_output_directory(),
+             folder_paths.get_temp_directory())
+    if not any(folder_paths.is_within_directory(root, target) for root in roots):
+        raise RuntimeError(f"{os.path.basename(target)} is outside ComfyUI's input, output and temp folders.")
+    return target
+
+
 def list_videos(path):
     if os.path.isdir(path):
-        return [os.path.join(path, f) for f in sorted(os.listdir(path))
+        return [contained(os.path.join(path, f)) for f in sorted(os.listdir(path))
                 if f.lower().endswith(VIDEO_EXTENSIONS)]
     return [path]
 
@@ -103,11 +112,13 @@ def resolve_video(source, video, path, video_index):
     if source == "path":
         if not path.strip():
             raise RuntimeError("source is set to 'path' but no path was given.")
-        candidates = list_videos(path.strip().strip('"'))
+        # Relative paths start in the input folder.
+        target = contained(os.path.join(folder_paths.get_input_directory(), path.strip().strip('"')))
+        candidates = list_videos(target)
         if not candidates:
             raise RuntimeError(f"No video files found in {path}")
         return candidates[video_index % len(candidates)], len(candidates)
-    return folder_paths.get_annotated_filepath(video), 1
+    return contained(folder_paths.get_annotated_filepath(video)), 1
 
 
 class LoadVideo4K:
@@ -121,7 +132,7 @@ class LoadVideo4K:
             "required": {
                 "source": (["upload", "path"],),
                 "video": (files or ["(no videos in input folder)"], {"video_upload": True}),
-                "path": ("STRING", {"default": "", "tooltip": "A video file, or a folder to step through with video_index. Used when source is 'path'."}),
+                "path": ("STRING", {"default": "", "tooltip": "A video file, or a folder to step through with video_index, inside ComfyUI's input, output or temp folder. Relative paths start in input. Used when source is 'path'."}),
                 "video_index": ("INT", {"default": 0, "min": 0, "max": 9999, "tooltip": "Which video in the folder to load."}),
                 "resolution": (list(RESOLUTIONS), {"default": "source", "tooltip": "Sets the longest side, keeping aspect ratio: 2160p is 3840, 1080p is 1920. Fills in custom_width and custom_height; editing either switches to custom."}),
                 "custom_width": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 8}),
