@@ -31,6 +31,11 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
 
+      # Stops a release the Registry's security review would flag, since a flagged
+      # version can only be installed as "nightly".
+      - name: Check against the Registry's security rules
+        run: python .github/registry_check.py scan .
+
       - name: Publish custom node
         uses: Comfy-Org/publish-node-action@v1
         with:
