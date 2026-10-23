@@ -33,8 +33,23 @@ jobs:
 
       # Stops a release the Registry's security review would flag, since a flagged
       # version can only be installed as "nightly".
+      # Patterns are written so this file never spells out the calls it looks for.
       - name: Check against the Registry's security rules
-        run: python .github/registry_check.py scan .
+        shell: bash
+        run: |
+          files=$(git ls-files '*.py' '*.js' | grep -v '^[.]github/' || true)
+          fail=0
+          check() { if grep -nE "$2" $files; then echo "::error::$1"; fail=1; fi; }
+          check "Environment variable read (python_environment_manipulation)" 'os[.](environ|getenv|putenv)|getenv[(]'
+          check "Shell command" 'os[.](system|popen)[(]|shell *= *True'
+          check "Dynamic code" '(^|[^.a-zA-Z_])(eval|exec)[(]|__import__[(]'
+          check "Unsafe deserialisation" '(pickle|marshal)[.]loads?[(]'
+          check "Installs packages at runtime" 'pip[.]main|pip +install|ensurepip'
+          if grep -qE 'routes[.](get|post)|"[a-z_]*(path|folder|dir|file)[a-z_]*": *[(]"STRING"' $files \
+             && ! grep -qE 'is_within_directory|commonpath' $files; then
+            echo "::error::File paths from requests or inputs with no containment check (arbitrary-file-read)"; fail=1
+          fi
+          exit $fail
 
       - name: Publish custom node
         uses: Comfy-Org/publish-node-action@v1
