@@ -29,6 +29,9 @@ const SETTINGS = ["resolution", "custom_width", "custom_height", "divisible_by",
 // The caps show what will load rather than 0. While one follows the clip it sends 0,
 // so a longer clip picked later is not cut short.
 const CAPS = ["frame_load_cap", "seconds_cap"];
+// The frontend loops a preview until it is paused, and a forgotten 4K preview keeps
+// decoding. Stop it after this many plays; pressing play again starts a new count.
+const PREVIEW_PLAYS = 3;
 
 function widget(node, name) {
     return node.widgets?.find((w) => w.name === name);
@@ -214,13 +217,46 @@ function showTime(node, seconds) {
 function confine(node, video) {
     const check = () => {
         const range = node.properties.v4k_preview_whole ? null : loadedRange(node);
-        if (range && previewVideo(node) === video
-                && (video.currentTime < range[0] - 0.02 || video.currentTime >= range[1])) {
-            video.currentTime = range[0];
+        if (range && previewVideo(node) === video && !video.seeking) {
+            if (video.currentTime >= range[1] && !video.paused) playedOnce(video, range[0]);
+            else if (video.currentTime < range[0] - 0.02 || video.currentTime >= range[1]) video.currentTime = range[0];
         }
         video.requestVideoFrameCallback(check);
     };
     video.requestVideoFrameCallback(check);
+}
+
+// Takes over the preview's looping so it can stop after PREVIEW_PLAYS.
+// `start` gives the time each play starts from.
+function limitPlays(video, start) {
+    video.loop = false;
+    video.v4kPlays = 0;
+    video.addEventListener("play", () => {
+        if (video.v4kPlays >= PREVIEW_PLAYS) video.v4kPlays = 0;
+    });
+    video.addEventListener("ended", () => playedOnce(video, start()));
+}
+
+function playedOnce(video, start) {
+    video.v4kPlays += 1;
+    video.currentTime = start;
+    if (video.v4kPlays < PREVIEW_PLAYS) video.play();
+    else video.pause();
+}
+
+// The preview is a DOM widget the frontend adds later, with a new video element for
+// each clip, so watch for those.
+function onNewVideo(node, callback) {
+    const addDOMWidget = node.addDOMWidget;
+    node.addDOMWidget = function (name, type, element) {
+        new MutationObserver(() => {
+            const video = element.querySelector("video");
+            if (!video || video.v4kSeen) return;
+            video.v4kSeen = true;
+            callback(video);
+        }).observe(element, { childList: true, subtree: true });
+        return addDOMWidget.apply(this, arguments);
+    };
 }
 
 // Sets skip_first_seconds or seconds_cap from where the preview is, to 0.1s.
@@ -403,6 +439,15 @@ function drawExtras(ctx, node, w, spec, width, rightPadding) {
 app.registerExtension({
     name: "Video4K.Core",
     async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData.name === "V4K_SaveVideo") {
+            const onSaveCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const result = onSaveCreated?.apply(this, arguments);
+                onNewVideo(this, (video) => limitPlays(video, () => 0));
+                return result;
+            };
+            return;
+        }
         if (nodeData.name !== "V4K_LoadVideo") return;
         const required = nodeData.input.required;
         const defaults = Object.fromEntries(SETTINGS.map((name) => [name, required[name][1].default]));
@@ -492,16 +537,13 @@ app.registerExtension({
                     e.stopPropagation();
                     this.onDragDrop(e);
                 });
-                // Each clip gets a new video element, added once it has loaded.
-                new MutationObserver(() => {
-                    const video = element.querySelector("video");
-                    if (!video || video.v4kConfined) return;
-                    video.v4kConfined = true;
-                    confine(this, video);
-                    showTime(this, loadedRange(this)?.[0]);
-                }).observe(element, { childList: true, subtree: true });
                 return addDOMWidget.apply(this, arguments);
             };
+            onNewVideo(this, (video) => {
+                limitPlays(video, () => (this.properties.v4k_preview_whole ? 0 : loadedRange(this)?.[0] ?? 0));
+                confine(this, video);
+                showTime(this, loadedRange(this)?.[0]);
+            });
 
             requestAnimationFrame(() => {
                 previewMode.value = !this.properties.v4k_preview_whole;
