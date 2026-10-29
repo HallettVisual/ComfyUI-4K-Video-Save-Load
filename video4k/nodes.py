@@ -288,11 +288,14 @@ class SaveVideo4K:
         if len(images) == 0:
             raise RuntimeError("No frames to save.")
 
+        # Read the size from one frame: Smart Video Stitcher hands over a lazy frame
+        # sequence (len/getitem/iter, no .shape) so a 4K clip never sits in RAM whole.
+        height, width = images[0].shape[0], images[0].shape[1]
         spec = ENCODERS[encoder]
         output_dir = (folder_paths.get_output_directory() if save_output
                       else folder_paths.get_temp_directory())
         full_folder, filename, _, subfolder, _ = folder_paths.get_save_image_path(
-            filename_prefix, output_dir, images.shape[2], images.shape[1])
+            filename_prefix, output_dir, width, height)
         os.makedirs(full_folder, exist_ok=True)
         # get_save_image_path only counts .png, so find our own next free number.
         matcher = re.compile(re.escape(filename) + r"_(\d+)\D*\..+", re.IGNORECASE)
@@ -300,14 +303,9 @@ class SaveVideo4K:
                 (matcher.fullmatch(f) for f in os.listdir(full_folder)) if m]
         counter = max(used or [0]) + 1
 
-        height, width = images.shape[1], images.shape[2]
         # Encoders need even dimensions; pad rather than refuse to save.
         pad_w, pad_h = width % 2, height % 2
-        if pad_w or pad_h:
-            images = torch.nn.functional.pad(
-                images.permute(0, 3, 1, 2), (0, pad_w, 0, pad_h), mode="replicate"
-            ).permute(0, 2, 3, 1)
-            width, height = width + pad_w, height + pad_h
+        width, height = width + pad_w, height + pad_h
 
         deep = spec.get("bits") == 16
         args = [media.ffmpeg_path, "-v", "error", "-y", "-f", "rawvideo",
@@ -335,6 +333,10 @@ class SaveVideo4K:
 
         def frames():
             for image in images:
+                if pad_w or pad_h:
+                    image = torch.nn.functional.pad(
+                        image.permute(2, 0, 1)[None], (0, pad_w, 0, pad_h), mode="replicate"
+                    )[0].permute(1, 2, 0)
                 pbar.update(1)
                 yield to_raw(image).tobytes()
 
