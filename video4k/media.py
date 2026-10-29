@@ -17,6 +17,12 @@ from . import accel
 ENCODE_ARGS = ("utf-8", "backslashreplace")
 
 
+def error_text(data):
+    # ffmpeg ends lines with \r\n on Windows, and the ComfyUI console turns each \r
+    # into a blank line, which hid the whole message.
+    return data.decode(*ENCODE_ARGS).replace("\r\n", "\n")
+
+
 def _find_ffmpeg():
     system = shutil.which("ffmpeg")
     if system is not None:
@@ -197,8 +203,8 @@ def encode(path, args, frames, env=None):
             proc.stdin.close()
         except BrokenPipeError:
             raise RuntimeError("ffmpeg stopped while encoding:\n"
-                               + proc.stderr.read().decode(*ENCODE_ARGS))
-        message = proc.stderr.read().decode(*ENCODE_ARGS)
+                               + error_text(proc.stderr.read()))
+        message = error_text(proc.stderr.read())
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg failed writing {os.path.basename(path)}:\n{message}")
     return message
@@ -213,7 +219,7 @@ def mux_audio(video_path, output_path, waveform, sample_rate, audio_args):
     data = waveform.transpose(0, 1).contiguous().numpy().tobytes()
     result = subprocess.run(args, input=data, capture_output=True)
     if result.returncode != 0:
-        raise RuntimeError("ffmpeg failed muxing audio:\n" + result.stderr.decode(*ENCODE_ARGS))
+        raise RuntimeError("ffmpeg failed muxing audio:\n" + error_text(result.stderr))
 
 
 def read_audio(path, start_time, duration, sample_rate=44100):

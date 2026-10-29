@@ -307,6 +307,11 @@ class SaveVideo4K:
         pad_w, pad_h = width % 2, height % 2
         width, height = width + pad_w, height + pad_h
 
+        # NVENC H.264 stops at 4096px a side; HEVC NVENC goes to 8192 in the same .mp4.
+        if spec["codec"] == "h264_nvenc" and max(width, height) > 4096:
+            print(f"[4K Video Save] {width}x{height} is over H.264 NVENC's 4096px limit, saving as HEVC (nvenc).")
+            spec = ENCODERS["hevc (nvenc)"]
+
         deep = spec.get("bits") == 16
         args = [media.ffmpeg_path, "-v", "error", "-y", "-f", "rawvideo",
                 "-pix_fmt", "rgb48le" if deep else "rgb24", "-s", f"{width}x{height}",
