@@ -193,10 +193,10 @@ def write_metadata_file(metadata, directory):
     return path
 
 
-def encode(path, args, frames, env=None):
+def encode(path, args, frames):
     """Feed already-converted frame bytes to ffmpeg, reporting its errors."""
     with subprocess.Popen(args + [path], stdin=subprocess.PIPE,
-                          stderr=subprocess.PIPE, env=env) as proc:
+                          stderr=subprocess.PIPE) as proc:
         try:
             for frame in accel.prefetch(frames):
                 proc.stdin.write(frame)

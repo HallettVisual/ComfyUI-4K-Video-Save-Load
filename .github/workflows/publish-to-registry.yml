@@ -40,7 +40,7 @@ jobs:
           files=$(git ls-files '*.py' '*.js' | grep -v '^[.]github/' || true)
           fail=0
           check() { if grep -nE "$2" $files; then echo "::error::$1"; fail=1; fi; }
-          check "Environment variable read (python_environment_manipulation)" 'os[.](environ|getenv|putenv)|getenv[(]'
+          check "Environment variable read (python_environment_manipulation)" 'os[.](environ|getenv|putenv)|getenv[(]|(^|[^.a-zA-Z_])env *=[^=]'
           check "Shell command" 'os[.](system|popen)[(]|shell *= *True'
           check "Dynamic code" '(^|[^.a-zA-Z_])(eval|exec)[(]|__import__[(]'
           check "Unsafe deserialisation" '(pickle|marshal)[.]loads?[(]'
